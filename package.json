@@ -1,0 +1,26 @@
+{
+  "name": "ayeconic",
+  "version": "1.0.0",
+  "description": "An AI-powered, offline semantic Material Design Icon search tool using client-side vector embeddings.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "live-server",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "vue",
+    "vuetify",
+    "mdi",
+    "icons",
+    "material-design",
+    "semantic-search",
+    "embeddings",
+    "ai",
+    "emlet"
+  ],
+  "author": "basedwon",
+  "license": "MIT",
+  "devDependencies": {
+    "live-server": "^1.2.2"
+  }
+}
