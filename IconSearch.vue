@@ -16,6 +16,46 @@
           :disabled="isEmbedding"
         ></v-text-field>
 
+        <v-expansion-panels flat class="mb-4">
+          <v-expansion-panel style="background: transparent; border: 1px solid rgba(255,255,255,0.1);">
+            <v-expansion-panel-header class="text--secondary">Advanced Blending</v-expansion-panel-header>
+            <v-expansion-panel-content>
+              <v-row>
+                <v-col cols="12" sm="4">
+                  <div class="text-caption text-center">Keyword Weight ({{ keywordWeight }})</div>
+                  <v-slider
+                    v-model="keywordWeight"
+                    min="0" max="2" step="0.1"
+                    color="primary" track-color="rgba(255,255,255,0.1)"
+                    hide-details
+                    @change="triggerSearch"
+                  ></v-slider>
+                </v-col>
+                <v-col cols="12" sm="4">
+                  <div class="text-caption text-center">Semantic ML Weight ({{ semanticWeight }})</div>
+                  <v-slider
+                    v-model="semanticWeight"
+                    min="0" max="2" step="0.1"
+                    color="primary" track-color="rgba(255,255,255,0.1)"
+                    hide-details
+                    @change="triggerSearch"
+                  ></v-slider>
+                </v-col>
+                <v-col cols="12" sm="4">
+                  <div class="text-caption text-center">Strictness Threshold ({{ similarityThreshold }})</div>
+                  <v-slider
+                    v-model="similarityThreshold"
+                    min="0.1" max="1.5" step="0.1"
+                    color="warning" track-color="rgba(255,255,255,0.1)"
+                    hide-details
+                    @change="triggerSearch"
+                  ></v-slider>
+                </v-col>
+              </v-row>
+            </v-expansion-panel-content>
+          </v-expansion-panel>
+        </v-expansion-panels>
+
         <v-progress-linear
           v-if="isEmbedding"
           :value="embeddingProgress"
@@ -75,7 +115,7 @@
     <!-- No Results -->
     <v-row v-else-if="!isEmbedding && !isSearching">
       <v-col cols="12" class="text-center text--secondary">
-        No icons found matching "{{ search }}".
+        No icons found matching "{{ search }}". Try lowering the Strictness Threshold.
       </v-col>
     </v-row>
 
@@ -112,6 +152,30 @@ function cosineSimilarity(vecA, vecB) {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+function getKeywordScore(icon, searchTerm) {
+  if (!searchTerm) return 1.0;
+  const s = searchTerm;
+  let maxScore = 0;
+
+  if (icon.name === s) return 1.0;
+  if (icon.name.startsWith(s)) maxScore = Math.max(maxScore, 0.8);
+  if (icon.name.includes(s)) maxScore = Math.max(maxScore, 0.5);
+
+  if (icon.aliases) {
+    if (icon.aliases.some(a => a === s)) maxScore = Math.max(maxScore, 0.95);
+    else if (icon.aliases.some(a => a.startsWith(s))) maxScore = Math.max(maxScore, 0.7);
+    else if (icon.aliases.some(a => String(a).includes(s))) maxScore = Math.max(maxScore, 0.4);
+  }
+
+  if (icon.tags) {
+    if (icon.tags.some(t => t === s)) maxScore = Math.max(maxScore, 0.9);
+    else if (icon.tags.some(t => t.startsWith(s))) maxScore = Math.max(maxScore, 0.6);
+    else if (icon.tags.some(t => String(t).includes(s))) maxScore = Math.max(maxScore, 0.3);
+  }
+
+  return maxScore;
+}
+
 export default {
   name: 'IconSearch',
   props: {
@@ -124,6 +188,9 @@ export default {
     return {
       searchInput: '',
       search: '',
+      keywordWeight: 1.0,
+      semanticWeight: 0.8,
+      similarityThreshold: 0.4,
       snackbar: false,
       copiedIcon: '',
       isEmbedding: false,
@@ -176,6 +243,12 @@ export default {
     }
   },
   methods: {
+    triggerSearch() {
+      if (this.search && this.search.trim()) {
+        this.page = 1;
+        this.doSearch();
+      }
+    },
     async doSearch() {
       if (this.isEmbedding || !this.search || !this.search.trim()) {
         this.filteredIcons = this.icons;
@@ -187,14 +260,14 @@ export default {
       const searchTerm = this.search.toLowerCase().trim();
       let queryVector;
       
-      try {
-        const embedder = typeof window.Emlet !== 'undefined' ? new window.Emlet(96) : window.emlet;
-        queryVector = embedder.embed(searchTerm);
-      } catch (e) {
-        console.warn("Embedding API resolving...");
-        this.filteredIcons = this.icons;
-        this.isSearching = false;
-        return;
+      if (this.semanticWeight > 0) {
+        try {
+          const embedder = typeof window.Emlet !== 'undefined' ? new window.Emlet(96) : window.emlet;
+          queryVector = embedder.embed(searchTerm);
+        } catch (e) {
+          console.warn("Embedding API resolving...");
+          // Will just fall back to keyword score if semantic mapping fails
+        }
       }
       
       const scoredIcons = [];
@@ -205,13 +278,25 @@ export default {
         const end = Math.min(i + chunkSize, totalLen);
         for (let j = i; j < end; j++) {
           const icon = this.icons[j];
-          if (!icon.vector) continue;
+          let simScore = 0;
+          let kwScore = 0;
           
-          const sim = cosineSimilarity(queryVector, icon.vector);
-          scoredIcons.push({ icon, sim, originalIndex: j });
+          if (queryVector && icon.vector && this.semanticWeight > 0) {
+            simScore = Math.max(0, cosineSimilarity(queryVector, icon.vector));
+          }
+          
+          if (this.keywordWeight > 0) {
+            kwScore = getKeywordScore(icon, searchTerm);
+          }
+          
+          const finalScore = (kwScore * this.keywordWeight) + (simScore * this.semanticWeight);
+          
+          if (finalScore >= this.similarityThreshold) {
+            scoredIcons.push({ icon, sim: finalScore, originalIndex: j });
+          }
         }
         
-        // Yield to browser loop to prevent loader spinner freeze
+        // Yield to browser loop so spinner remains smooth
         await new Promise(resolve => setTimeout(resolve, 0));
       }
       
